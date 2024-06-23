@@ -1,6 +1,7 @@
 import argparse
 
-from .karras_diffusion import KarrasDenoiser
+#from .karras_diffusion import KarrasDenoiser
+from .vp_diffusion import VPDenoiser
 from .unet import UNetModel
 import numpy as np
 
@@ -72,6 +73,9 @@ def create_model_and_diffusion(
     sigma_min=0.002,
     sigma_max=80.0,
     distillation=False,
+    alpha_schedule="cosine",
+    objective="pred_noise",
+    num_timesteps=100
 ):
     model = create_model(
         image_size,
@@ -91,6 +95,14 @@ def create_model_and_diffusion(
         use_fp16=use_fp16,
         use_new_attention_order=use_new_attention_order,
     )
+    
+    diffusion = VPDenoiser(
+        alpha_schedule=alpha_schedule,
+        distillation=distillation,
+        objective=objective,
+        num_timesteps=num_timesteps
+    )
+    """
     diffusion = KarrasDenoiser(
         sigma_data=0.5,
         sigma_max=sigma_max,
@@ -98,8 +110,9 @@ def create_model_and_diffusion(
         distillation=distillation,
         weight_schedule=weight_schedule,
     )
+    """
     return model, diffusion
-
+    
 
 def create_model(
     image_size,

@@ -77,6 +77,7 @@ class KarrasDenoiser:
         c_in = 1 / (sigma**2 + self.sigma_data**2) ** 0.5
         return c_skip, c_out, c_in
 
+    #predicts x_0
     def training_losses(self, model, x_start, sigmas, model_kwargs=None, noise=None):
         if model_kwargs is None:
             model_kwargs = {}
@@ -121,9 +122,11 @@ class KarrasDenoiser:
 
         dims = x_start.ndim
 
+        #model is the online model
         def denoise_fn(x, t):
             return self.denoise(model, x, t, **model_kwargs)[1]
 
+        #target model is the avgeraged weight model
         if target_model:
 
             @th.no_grad()
@@ -133,12 +136,14 @@ class KarrasDenoiser:
         else:
             raise NotImplementedError("Must have a target model")
 
+        #teacher model is the diffusion model
         if teacher_model:
 
             @th.no_grad()
             def teacher_denoise_fn(x, t):
                 return teacher_diffusion.denoise(teacher_model, x, t, **model_kwargs)[1]
 
+        #single step heun solver
         @th.no_grad()
         def heun_solver(samples, t, next_t, x0):
             x = samples
@@ -159,6 +164,7 @@ class KarrasDenoiser:
 
             return samples
 
+        #single step euler solver
         @th.no_grad()
         def euler_solver(samples, t, next_t, x0):
             x = samples
@@ -170,6 +176,8 @@ class KarrasDenoiser:
             samples = x + d * append_dims(next_t - t, dims)
 
             return samples
+        
+        #TODO: wrapper for DDIM
 
         indices = th.randint(
             0, num_scales - 1, (x_start.shape[0],), device=x_start.device
@@ -343,7 +351,8 @@ class KarrasDenoiser:
                 append_dims(x, x_t.ndim)
                 for x in self.get_scalings_for_boundary_condition(sigmas)
             ]
-        rescaled_t = 1000 * 0.25 * th.log(sigmas + 1e-44)
+        #rescaled_t = 1000 * 0.25 * th.log(sigmas + 1e-44)
+        rescaled_t = sigmas
         model_output = model(c_in * x_t, rescaled_t, **model_kwargs)
         denoised = c_out * model_output + c_skip * x_t
         return model_output, denoised
@@ -369,12 +378,15 @@ def karras_sample(
     s_noise=1.0,
     generator=None,
     ts=None,
+    vp=False
 ):
     if generator is None:
         generator = get_generator("dummy")
 
     if sampler == "progdist":
         sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, rho, device=device)
+    elif vp:
+        sigmas = get_sigmas_vp(steps+1, device=device)
     else:
         sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, rho, device=device)
 
@@ -388,6 +400,7 @@ def karras_sample(
         "progdist": sample_progdist,
         "euler": sample_euler,
         "multistep": stochastic_iterative_sampler,
+        "ddim": ddim_sample
     }[sampler]
 
     if sampler in ["heun", "dpm"]:
@@ -426,6 +439,16 @@ def get_sigmas_karras(n, sigma_min, sigma_max, rho=7.0, device="cpu"):
     max_inv_rho = sigma_max ** (1 / rho)
     sigmas = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
     return append_zero(sigmas).to(device)
+
+def simple_linear_alpha_schedule(t, clip_min = 1e-9):
+    return (1 - t).clamp(min = clip_min)
+
+def get_sigmas_vp(n, device):
+    times = th.linspace(1,0,n)
+    alpha_sq = simple_linear_alpha_schedule(times)
+    sigmas = (1-alpha_sq).sqrt()
+    return append_zero(sigmas).to(device)
+
 
 
 def to_d(x, sigma, denoised):
@@ -570,6 +593,7 @@ def sample_euler(
     for i in indices:
         sigma = sigmas[i]
         denoised = denoiser(x, sigma * s_in)
+        #does to_d give us the noise?
         d = to_d(x, sigma, denoised)
         if callback is not None:
             callback(
@@ -638,6 +662,58 @@ def sample_dpm(
         x = x + d_2 * dt_2
     return x
 
+def alpha_from_sigma(sigma):
+    alpha = (-sigma**2 +1).sqrt()
+    return alpha
+
+def scaling_for_ddim_boundry(tk, t):
+    c_skip = t//tk
+    ratio = t/tk
+    c_out = th.where(ratio<1, th.tensor(1, dtype=tk.dtype, device=tk.device), th.tensor(0, dtype=tk.dtype, device=tk.device))
+    return c_skip, c_out
+
+#TODO: ddim step
+def ddim(z_t, pred_x, sigma_tk, sigma_t):
+    alpha_tk = alpha_from_sigma(sigma_tk)
+    alpha_t = alpha_from_sigma(sigma_t)
+    c_skip, c_out = scaling_for_ddim_boundry(sigma_tk, sigma_t)
+    c_skip, c_out = [append_dims(x, z_t.ndim) for x in [c_skip, c_out]]
+    out = alpha_t*pred_x + ((sigma_t/sigma_tk)*(z_t-alpha_tk*pred_x))
+    return c_skip*z_t + c_out*out
+
+#TODO: ddim sample
+@th.no_grad()
+def ddim_sample(
+    denoiser,
+    x,
+    sigmas,
+    generator,
+    progress=False,
+    callback=None,
+):
+    s_in = x.new_ones([x.shape[0]])
+    indices = range(len(sigmas) - 1)
+    if progress:
+        from tqdm.auto import tqdm
+        indices = tqdm(indices)
+    
+    for i in indices:
+        sigma_tk = sigmas[i]
+        sigma_t = sigmas[i+1]
+        denoised = denoiser(x, sigma_tk*s_in)
+        x=ddim(x, denoised, sigma_tk, sigma_t)
+        if callback is not None:
+            callback(
+                {
+                    "x": x,
+                    "i": i,
+                    "sigma_tk": sigma_tk,
+                    "sigma_t": sigma_t,
+                    "denoised": denoised,
+                }
+            )
+    return x
+    
 
 @th.no_grad()
 def sample_onestep(

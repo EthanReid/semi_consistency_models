@@ -1,0 +1,13 @@
+cm/__pycache__/__init__.cpython-310.pyc
+*.pyc
+*.png
+*.pt
+*.csv
+datasets/lsun_train_output_dir
+*.log
+*wandb-metadata.json
+*wandb-summary.json
+*.yaml
+*.wandb
+wandb/*
+*.npz

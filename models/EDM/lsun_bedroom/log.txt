@@ -1,0 +1,16 @@
+Logging to models/EDM/lsun_bedroom/
+creating model and diffusion...
+sampling...
+created 10 samples
+saving to models/EDM/lsun_bedroom/samples_10x128x128x3.npz
+saved image 0 to models/EDM/lsun_bedroom/ddim/images/sample_0.png
+saved image 1 to models/EDM/lsun_bedroom/ddim/images/sample_1.png
+saved image 2 to models/EDM/lsun_bedroom/ddim/images/sample_2.png
+saved image 3 to models/EDM/lsun_bedroom/ddim/images/sample_3.png
+saved image 4 to models/EDM/lsun_bedroom/ddim/images/sample_4.png
+saved image 5 to models/EDM/lsun_bedroom/ddim/images/sample_5.png
+saved image 6 to models/EDM/lsun_bedroom/ddim/images/sample_6.png
+saved image 7 to models/EDM/lsun_bedroom/ddim/images/sample_7.png
+saved image 8 to models/EDM/lsun_bedroom/ddim/images/sample_8.png
+saved image 9 to models/EDM/lsun_bedroom/ddim/images/sample_9.png
+sampling complete

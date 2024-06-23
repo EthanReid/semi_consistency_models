@@ -1,0 +1,19 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    //for debugging lcm "cwd": "${workspaceFolder}/lcm4lg/latent-diffusion-for-language"
+    //"cwd": "${workspaceFolder}/semi_consistency_models",
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "launch img module",
+            "type": "debugpy",
+            "request": "launch",
+            "console": "integratedTerminal",
+            "args": "${command:pickArgs}",
+            "cwd": "/home/hopfield/semi_consistency_models",
+            "module" : "scripts.image_sample"
+        }
+    ]
+}

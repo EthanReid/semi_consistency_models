@@ -24,7 +24,7 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure(dir=args.out_dir, args=args)
 
     logger.log("creating model and diffusion...")
     ema_scale_fn = create_ema_and_scales_fn(
@@ -140,10 +140,12 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        k=args.k
     ).run_loop()
 
 
 def create_argparser():
+    #TODO save each run in its own dir
     defaults = dict(
         data_dir="",
         schedule_sampler="uniform",
@@ -159,6 +161,13 @@ def create_argparser():
         resume_checkpoint="",
         use_fp16=False,
         fp16_scale_growth=1e-3,
+        k=1,
+        out_dir="",
+        project_name="openai_cm",
+        run_name="CM_train",
+        alpha_schedule="cosine",
+        objective="pred_noise",
+        num_timesteps=100
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(cm_train_defaults())

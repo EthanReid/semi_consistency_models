@@ -9,6 +9,7 @@ import os
 import numpy as np
 import torch as th
 import torch.distributed as dist
+from PIL import Image
 
 from cm import dist_util, logger
 from cm.script_util import (
@@ -20,13 +21,14 @@ from cm.script_util import (
 )
 from cm.random_util import get_generator
 from cm.karras_diffusion import karras_sample
+from cm.vp_diffusion import VPSampler
 
 
 def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure(dir=args.out_dir, args=args)
 
     if "consistency" in args.training_mode:
         distillation = True
@@ -64,7 +66,7 @@ def main():
                 low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev()
             )
             model_kwargs["y"] = classes
-
+        """x
         sample = karras_sample(
             diffusion,
             model,
@@ -82,7 +84,21 @@ def main():
             s_noise=args.s_noise,
             generator=generator,
             ts=ts,
+            vp=args.vp
         )
+        """
+        sampler = VPSampler(
+            diffusion=diffusion,
+            model=model,
+            shape=(args.batch_size, 3, args.image_size, args.image_size),
+            sampler=args.sampler,
+            num_timesteps=args.num_timesteps,
+            clip_denoised=args.clip_denoised,
+            model_kwargs=model_kwargs,
+            device=dist_util.dev(),
+            training_mode=args.training_mode
+        )
+        sample = sampler.sample()
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
         sample = sample.contiguous()
@@ -107,10 +123,17 @@ def main():
         shape_str = "x".join([str(x) for x in arr.shape])
         out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
         logger.log(f"saving to {out_path}")
-        if args.class_cond:
-            np.savez(out_path, arr, label_arr)
-        else:
-            np.savez(out_path, arr)
+        #if args.class_cond:
+        #    np.savez(out_path, arr, label_arr)
+        #else:
+        #    np.savez(out_path, arr)
+        img_dir = os.path.join(logger.get_dir(), args.sampler, "images")
+        os.makedirs(img_dir, exist_ok=True)
+        for i, image_array in enumerate(arr):
+            image = Image.fromarray(image_array)
+            image_path = os.path.join(img_dir, f"sample_{i}.png")
+            image.save(image_path)
+            logger.log(f"saved image {i} to {image_path}")
 
     dist.barrier()
     logger.log("sampling complete")
@@ -132,6 +155,12 @@ def create_argparser():
         model_path="",
         seed=42,
         ts="",
+        out_dir="",
+        project_name="openai_cm",
+        run_name="edm",
+        alpha_schedule="cosine",
+        objective="pred_noise",
+        num_timesteps=100
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

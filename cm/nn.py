@@ -101,6 +101,13 @@ def append_dims(x, target_dims):
         )
     return x[(...,) + (None,) * dims_to_append]
 
+def right_pad_dims_to(x, t):
+    """right pad dims"""
+    padding_dims = x.ndim - t.ndim
+    if padding_dims <= 0:
+        return t
+    return t.view(*t.shape, *((1,) * padding_dims))
+
 
 def append_zero(x):
     return th.cat([x, x.new_zeros([1])])

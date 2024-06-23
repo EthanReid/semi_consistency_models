@@ -14,6 +14,7 @@ import tempfile
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager
+import wandb
 
 DEBUG = 10
 INFO = 20
@@ -266,6 +267,9 @@ def warn(*args):
 def error(*args):
     log(*args, level=ERROR)
 
+def log_wandb(step):
+    get_current().log_wandb(step)
+
 
 def set_level(level):
     """
@@ -328,19 +332,24 @@ def get_current():
 
     return Logger.CURRENT
 
+def wandb_init(project:str, name:str, config:dict):
+    wandb.login()
+    wandb.init(project=project, name=name, config=config)
+
 
 class Logger(object):
     DEFAULT = None  # A logger with no output files. (See right below class definition)
     # So that you can still log to the terminal without setting up any output files
     CURRENT = None  # Current logger being used by the free functions above
 
-    def __init__(self, dir, output_formats, comm=None):
+    def __init__(self, dir, output_formats, comm=None, args={}):
         self.name2val = defaultdict(float)  # values this iteration
         self.name2cnt = defaultdict(int)
         self.level = INFO
         self.dir = dir
         self.output_formats = output_formats
         self.comm = comm
+        wandb_init(args.project_name, args.run_name, args)
 
     # Logging API, forwarded
     # ----------------------------------------
@@ -372,6 +381,15 @@ class Logger(object):
         self.name2val.clear()
         self.name2cnt.clear()
         return out
+
+    def log_wandb(self, step):
+        wandb.log(
+            {
+                name: val
+                for (name, val) in self.name2val.items()
+            },
+            step=step
+        )
 
     def log(self, *args, level=INFO):
         if self.level <= level:
@@ -439,12 +457,10 @@ def mpi_weighted_mean(comm, local_name2valcount):
         return {}
 
 
-def configure(dir=None, format_strs=None, comm=None, log_suffix=""):
+def configure(dir="out", format_strs=None, comm=None, log_suffix="", args={}):
     """
     If comm is provided, average all numerical stats across that comm
     """
-    if dir is None:
-        dir = os.getenv("OPENAI_LOGDIR")
     if dir is None:
         dir = osp.join(
             tempfile.gettempdir(),
@@ -466,7 +482,7 @@ def configure(dir=None, format_strs=None, comm=None, log_suffix=""):
     format_strs = filter(None, format_strs)
     output_formats = [make_output_format(f, dir, log_suffix) for f in format_strs]
 
-    Logger.CURRENT = Logger(dir=dir, output_formats=output_formats, comm=comm)
+    Logger.CURRENT = Logger(dir=dir, output_formats=output_formats, comm=comm, args=args)
     if output_formats:
         log("Logging to %s" % dir)
 

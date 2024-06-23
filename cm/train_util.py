@@ -165,12 +165,14 @@ class TrainLoop:
             batch, cond = next(self.data)
             self.run_step(batch, cond)
             if self.step % self.log_interval == 0:
-                logger.dumpkvs()
+                logger.log_wandb(self.step)
             if self.step % self.save_interval == 0:
                 self.save()
+                logger.dumpkvs()
                 # Run for a finite amount of time in integration tests.
                 if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.step > 0:
                     return
+                
         # Save the last checkpoint if it wasn't already saved.
         if (self.step - 1) % self.save_interval != 0:
             self.save()
@@ -193,7 +195,10 @@ class TrainLoop:
                 for k, v in cond.items()
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
-            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
+            #t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
+            
+            #NEW time code for training
+            t = th.zeros(micro.shape[0], device=dist_util.dev()).float().uniform_(0,1.)
 
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
@@ -214,9 +219,12 @@ class TrainLoop:
                     t, losses["loss"].detach()
                 )
 
-            loss = (losses["loss"] * weights).mean()
+            #weights is what gives us pred_v
+            #loss = (losses["loss"] * weights).mean()
+            loss = (losses["loss"]).mean()
             log_loss_dict(
-                self.diffusion, t, {k: v * weights for k, v in losses.items()}
+                self.diffusion, t, {k: v for k, v in losses.items()}
+                # self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
             self.mp_trainer.backward(loss)
 
@@ -242,9 +250,9 @@ class TrainLoop:
             if dist.get_rank() == 0:
                 logger.log(f"saving model {rate}...")
                 if not rate:
-                    filename = f"model{(self.step+self.resume_step):06d}.pt"
+                    filename = f"model.pt" #removed {(self.step+self.resume_step):06d} so it overwrites
                 else:
-                    filename = f"ema_{rate}_{(self.step+self.resume_step):06d}.pt"
+                    filename = f"ema_{rate}.pt"
                 with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
                     th.save(state_dict, f)
 
@@ -253,7 +261,7 @@ class TrainLoop:
 
         if dist.get_rank() == 0:
             with bf.BlobFile(
-                bf.join(get_blob_logdir(), f"opt{(self.step+self.resume_step):06d}.pt"),
+                bf.join(get_blob_logdir(), f"opt.pt"),
                 "wb",
             ) as f:
                 th.save(self.opt.state_dict(), f)
@@ -274,6 +282,7 @@ class CMTrainLoop(TrainLoop):
         training_mode,
         ema_scale_fn,
         total_training_steps,
+        k=1,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -283,6 +292,7 @@ class CMTrainLoop(TrainLoop):
         self.teacher_model = teacher_model
         self.teacher_diffusion = teacher_diffusion
         self.total_training_steps = total_training_steps
+        self.k=k
 
         if target_model:
             self._load_and_sync_target_parameters()
@@ -372,6 +382,7 @@ class CMTrainLoop(TrainLoop):
                 and self.global_step % self.save_interval == 0
             ):
                 self.save()
+                logger.dumpkvs()
                 saved = True
                 th.cuda.empty_cache()
                 # Run for a finite amount of time in integration tests.
@@ -379,7 +390,7 @@ class CMTrainLoop(TrainLoop):
                     return
 
             if self.global_step % self.log_interval == 0:
-                logger.dumpkvs()
+                logger.log_wandb(self.step)
 
         # Save the last checkpoint if it wasn't already saved.
         if not saved:
@@ -450,50 +461,26 @@ class CMTrainLoop(TrainLoop):
                 for k, v in cond.items()
             }
             last_batch = (i + self.microbatch) >= batch.shape[0]
-            t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
+            #replace this t
+            #t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
+
 
             ema, num_scales = self.ema_scale_fn(self.global_step)
             if self.training_mode == "progdist":
-                if num_scales == self.ema_scale_fn(0)[1]:
-                    compute_losses = functools.partial(
-                        self.diffusion.progdist_losses,
-                        self.ddp_model,
-                        micro,
-                        num_scales,
-                        target_model=self.teacher_model,
-                        target_diffusion=self.teacher_diffusion,
-                        model_kwargs=micro_cond,
-                    )
-                else:
-                    compute_losses = functools.partial(
-                        self.diffusion.progdist_losses,
-                        self.ddp_model,
-                        micro,
-                        num_scales,
-                        target_model=self.target_model,
-                        target_diffusion=self.diffusion,
-                        model_kwargs=micro_cond,
-                    )
+                raise NotImplemented
             elif self.training_mode == "consistency_distillation":
                 compute_losses = functools.partial(
-                    self.diffusion.consistency_losses,
-                    self.ddp_model,
-                    micro,
-                    num_scales,
+                    self.diffusion.cd_loss,
+                    model=self.ddp_model,
                     target_model=self.target_model,
-                    teacher_model=self.teacher_model,
-                    teacher_diffusion=self.teacher_diffusion,
+                    diffusion_model=self.teacher_model,
+                    x_start=micro,
+                    device=dist_util.dev(),
+                    k=self.k,
                     model_kwargs=micro_cond,
                 )
             elif self.training_mode == "consistency_training":
-                compute_losses = functools.partial(
-                    self.diffusion.consistency_losses,
-                    self.ddp_model,
-                    micro,
-                    num_scales,
-                    target_model=self.target_model,
-                    model_kwargs=micro_cond,
-                )
+                raise NotImplemented
             else:
                 raise ValueError(f"Unknown training mode {self.training_mode}")
 
@@ -504,15 +491,9 @@ class CMTrainLoop(TrainLoop):
                     losses = compute_losses()
 
             if isinstance(self.schedule_sampler, LossAwareSampler):
-                self.schedule_sampler.update_with_local_losses(
-                    t, losses["loss"].detach()
-                )
+                raise NotImplementedError
 
-            loss = (losses["loss"] * weights).mean()
-
-            log_loss_dict(
-                self.diffusion, t, {k: v * weights for k, v in losses.items()}
-            )
+            loss = (losses["loss"]).mean()
             self.mp_trainer.backward(loss)
 
     def save(self):
@@ -553,7 +534,6 @@ class CMTrainLoop(TrainLoop):
                 filename = f"teacher_model{step:06d}.pt"
                 with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
                     th.save(self.teacher_model.state_dict(), f)
-
         # Save model parameters last to prevent race conditions where a restart
         # loads model at step N, but opt/ema state isn't saved for step N.
         save_checkpoint(0, self.mp_trainer.master_params)
