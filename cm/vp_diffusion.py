@@ -169,7 +169,7 @@ class VPDenoiser:
         if d is None:
             d = x_t.ndim
         if n is None:
-            n = self.args.addim_n
+            n = 0.75
         alpha_t, alpha_s, sigma_t, sigma_s = self.get_alpha_sigma(t, s, x_t)
         x_var = n*(th.norm(pred_x-ground_x)**2)/d
         #x_var = 0.1/(2+(alpha_tk**2)/(sigma_tk**2))
@@ -265,7 +265,7 @@ class VPDenoiser:
 
         return terms
     
-    def scd_loss(self, model, target_model, diffusion_model, x_start, device, k=1, t=None, s=None, alpha_sq=None, noise=None,**model_kwargs):
+    def scd_loss(self, model, target_model, diffusion_model, x_start, device, k=1, t=None, s=None, alpha_sq=None, noise=None, t_scalar=0.1, is_addim=False, steps=4, **model_kwargs):
         #t and s calculated in parent func
         if model_kwargs is None:
             model_kwargs = {}
@@ -273,21 +273,28 @@ class VPDenoiser:
             noise = th.randn_like(x_start)
         terms = {}
 
-        if t is None or s is None:
-            raw_s = th.randint(0,self.num_timesteps-k+1, (x_start.shape[0],), device=device).float()
-            raw_t = raw_s + k
-            s = raw_s/self.num_timesteps
-            t = raw_t/self.num_timesteps
-        
-        alpha_t, alpha_s, sigma_t, sigma_s = self.get_alpha_sigma(t, s, x_start)  
+        #ni = self.n_scedule(train_i) #TODO
+        ni = self.num_timesteps
+        T_step = int(np.round(ni/steps))
+        step = th.randint(0, steps, (x_start.shape[0],), device=device).float()
+        i = th.randint(0, math.ceil(T_step*t_scalar), (x_start.shape[0],), device=device).float()
+        stage_end = step/steps
+        t = (stage_end + (i+1)/ni)
+        s = stage_end
+        alpha_t, alpha_s, sigma_t, sigma_s = self.get_alpha_sigma(t, s, x_start)
+
         noise = th.randn_like(x_start)
-        x_t = alpha_t*x_start+sigma_t*noise   
+        x_t = alpha_t*x_start+sigma_t*noise  
 
         with th.no_grad():
             x_diffusion = self.diffusion_model_output(diffusion_model, x_t=x_t, t=t).pred_x_start
+            #if is_addim:
+            #    x_s = self.__aDDIM(x_t, x_diffusion, x_start, t, s, x_t.shape[-1]**2) #d is assumed to be width^2. Only square images
+            #else:
             x_s = self.__ddim(x_t, x_diffusion, t, s)
-            x_0_s = self.consistency_model_output(target_model, x_s, s) #TODO
+        
         x_0_t = self.consistency_model_output(model, x_t, t)
+        x_0_s = self.__invDDIM(x_s, x_t, t, s)
 
         if self.loss_norm == "l1":
             diffs = th.abs(x_0_t - x_0_s)
@@ -338,7 +345,8 @@ class VPSampler:
         callback=None,
         model_kwargs=None,
         device=None,
-        training_mode="edm"
+        training_mode="edm",
+        cm_steps=4,
     ):
         self.diffusion = diffusion
         self.model = model
@@ -353,12 +361,14 @@ class VPSampler:
         self.device = device
         self.sample = {
             "ddim": self.sample_ddim,
-            "onestep": self.one_step
+            "onestep": self.one_step,
+            "scd": self.sample_scd
         }[sampler]
         self.training_mode=training_mode
+        self.cm_steps=cm_steps
     
     def denoise(self, x_t, t, **model_kwargs):
-        denoised = self.diffusion.denoise(self.model, x_t, t, **model_kwargs)
+        denoised = self.diffusion.denoise(self.model, x_t, t, **self.model_kwargs)
         if self.training_mode == "edm":
             denoised = denoised.pred_x_start
         if self.clip_denoised:
@@ -390,6 +400,11 @@ class VPSampler:
         out = alpha_s*pred_x + ((sigma_s/sigma_t)*(x_t-alpha_t*pred_x))
         return c_skip*x_t + c_out*out
     
+    def __invDDIM(self, x_s, x_t, t, s):
+        alpha_t, alpha_s, sigma_t, sigma_s = self.get_alpha_sigma(t, s, x_s)
+        x = (x_s-((sigma_s/sigma_t)*x_t))/(alpha_s-(alpha_t*(sigma_s/sigma_t)))
+        return x
+    
     @th.no_grad()
     def sample_ddim(self):
         time_pairs = self.get_sampling_timesteps(self.shape[0], device = self.device) #TODO: shape[0] gives batch
@@ -399,11 +414,23 @@ class VPSampler:
             x_t = self.__ddim(x_t, denoised, t, s)
         return x_t
     
+    @th.no_grad()
     def one_step(self):
         x_t = th.randn(self.shape, device=self.device)
         t = th.ones(self.shape[0], device=self.device)
         return self.denoise(x_t=x_t, t=t)
-
+    
+    @th.no_grad()
+    def sample_scd(self):
+        x_t = th.randn(self.shape, device=self.device)
+        for i in range(self.cm_steps):
+            t = 1-(i/self.cm_steps)
+            s = t-(1/self.cm_steps)
+            t = th.tensor(t, device=self.device).unsqueeze(0)
+            s = th.tensor(s, device=self.device).unsqueeze(0)
+            denoised = self.denoise(x_t=x_t, t=t)
+            x_t = self.__ddim(x_t, denoised, t, s)
+        return x_t
 
 
 

@@ -30,10 +30,10 @@ def main():
     dist_util.setup_dist()
     logger.configure(dir=args.out_dir, args=args)
 
-    if "consistency" in args.training_mode:
-        distillation = True
-    else:
+    if args.training_mode == "progdist" or args.training_mode == "edm":
         distillation = False
+    else:
+        distillation = True
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -96,7 +96,8 @@ def main():
             clip_denoised=args.clip_denoised,
             model_kwargs=model_kwargs,
             device=dist_util.dev(),
-            training_mode=args.training_mode
+            training_mode=args.training_mode,
+            cm_steps=args.cm_steps
         )
         sample = sampler.sample()
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
@@ -123,10 +124,10 @@ def main():
         shape_str = "x".join([str(x) for x in arr.shape])
         out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
         logger.log(f"saving to {out_path}")
-        #if args.class_cond:
-        #    np.savez(out_path, arr, label_arr)
-        #else:
-        #    np.savez(out_path, arr)
+        if args.class_cond:
+           np.savez(out_path, arr, label_arr)
+        else:
+            np.savez(out_path, arr)
         img_dir = os.path.join(logger.get_dir(), args.sampler, "images")
         os.makedirs(img_dir, exist_ok=True)
         for i, image_array in enumerate(arr):
@@ -160,7 +161,8 @@ def create_argparser():
         run_name="edm",
         alpha_schedule="cosine",
         objective="pred_noise",
-        num_timesteps=100
+        num_timesteps=100,
+        cm_steps=4
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

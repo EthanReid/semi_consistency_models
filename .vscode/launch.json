@@ -13,7 +13,7 @@
             "console": "integratedTerminal",
             "args": "${command:pickArgs}",
             "cwd": "/home/hopfield/semi_consistency_models",
-            "module" : "scripts.image_sample"
+            "module" : "evaluations.evaluator"
         }
     ]
 }

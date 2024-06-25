@@ -26,8 +26,8 @@ FID_SPATIAL_NAME = "mixed_6/conv:0"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("ref_batch", help="path to reference batch npz file")
-    parser.add_argument("sample_batch", help="path to sample batch npz file")
+    parser.add_argument("--ref_batch", help="path to reference batch npz file")
+    parser.add_argument("--sample_batch", help="path to sample batch npz file")
     args = parser.parse_args()
 
     config = tf.ConfigProto(
@@ -589,7 +589,7 @@ def _open_npy_file(path: str, arr_name: str):
     with open(path, "rb") as f:
         with zipfile.ZipFile(f, "r") as zip_f:
             if f"{arr_name}.npy" not in zip_f.namelist():
-                raise ValueError(f"missing {arr_name} in npz file")
+                arr_name = "images"
             with zip_f.open(f"{arr_name}.npy", "r") as arr_f:
                 yield arr_f
 

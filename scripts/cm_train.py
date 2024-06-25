@@ -36,12 +36,10 @@ def main():
         total_steps=args.total_training_steps,
         distill_steps_per_iter=args.distill_steps_per_iter,
     )
-    if args.training_mode == "progdist":
+    if args.training_mode == "progdist" or args.training_mode == "edm":
         distillation = False
-    elif "consistency" in args.training_mode:
-        distillation = True
     else:
-        raise ValueError(f"unknown training mode {args.training_mode}")
+        distillation = True
 
     model_and_diffusion_kwargs = args_to_dict(
         args, model_and_diffusion_defaults().keys()
@@ -140,7 +138,10 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
-        k=args.k
+        k=args.k,
+        t_scalar=args.t_scalar,
+        is_addim=args.is_addim,
+        scd_steps=args.scd_steps
     ).run_loop()
 
 
@@ -167,7 +168,10 @@ def create_argparser():
         run_name="CM_train",
         alpha_schedule="cosine",
         objective="pred_noise",
-        num_timesteps=100
+        num_timesteps=100,
+        t_scalar=0.1,
+        scd_steps=4,
+        is_addim=False
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(cm_train_defaults())

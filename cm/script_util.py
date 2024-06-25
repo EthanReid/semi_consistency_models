@@ -48,6 +48,7 @@ def model_and_diffusion_defaults():
         use_new_attention_order=False,
         learn_sigma=False,
         weight_schedule="karras",
+        objective="pred_noise"
     )
     return res
 
@@ -70,11 +71,11 @@ def create_model_and_diffusion(
     use_fp16,
     use_new_attention_order,
     weight_schedule,
+    objective,
     sigma_min=0.002,
     sigma_max=80.0,
     distillation=False,
     alpha_schedule="cosine",
-    objective="pred_noise",
     num_timesteps=100
 ):
     model = create_model(

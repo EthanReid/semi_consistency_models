@@ -283,6 +283,9 @@ class CMTrainLoop(TrainLoop):
         ema_scale_fn,
         total_training_steps,
         k=1,
+        t_scalar=0.1,
+        is_addim=False,
+        scd_steps=4,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -292,7 +295,10 @@ class CMTrainLoop(TrainLoop):
         self.teacher_model = teacher_model
         self.teacher_diffusion = teacher_diffusion
         self.total_training_steps = total_training_steps
-        self.k=k
+        self.k=k,
+        self.t_scalar = t_scalar
+        self.is_addim=is_addim,
+        self.scd_steps=scd_steps
 
         if target_model:
             self._load_and_sync_target_parameters()
@@ -481,6 +487,20 @@ class CMTrainLoop(TrainLoop):
                 )
             elif self.training_mode == "consistency_training":
                 raise NotImplemented
+            elif self.training_mode == "scd":
+                compute_losses = functools.partial(
+                    self.diffusion.scd_loss,
+                    model=self.ddp_model,
+                    target_model=self.target_model,
+                    diffusion_model=self.teacher_model,
+                    x_start=micro,
+                    device=dist_util.dev(),
+                    k=self.k,
+                    t_scalar=self.t_scalar,
+                    is_addim=self.is_addim,
+                    steps=self.scd_steps,
+                    model_kwargs=micro_cond,
+                )
             else:
                 raise ValueError(f"Unknown training mode {self.training_mode}")
 
@@ -494,6 +514,10 @@ class CMTrainLoop(TrainLoop):
                 raise NotImplementedError
 
             loss = (losses["loss"]).mean()
+            log_loss_dict(
+                self.diffusion, None, {k: v for k, v in losses.items()}
+                # self.diffusion, t, {k: v * weights for k, v in losses.items()}
+            )
             self.mp_trainer.backward(loss)
 
     def save(self):
@@ -586,6 +610,10 @@ def log_loss_dict(diffusion, ts, losses):
     for key, values in losses.items():
         logger.logkv_mean(key, values.mean().item())
         # Log the quantiles (four quartiles, in particular).
-        for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
-            quartile = int(4 * sub_t / diffusion.num_timesteps)
-            logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
+        if ts is None:
+            for sub_loss in values.detach().cpu().numpy():
+                logger.logkv_mean(f"{key}", sub_loss) #TODO, am I going to overwrite somehting?
+        else:
+            for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
+                quartile = int(4 * sub_t / diffusion.num_timesteps)
+                logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
