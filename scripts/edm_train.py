@@ -66,6 +66,7 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        backwards_interval=args.backwards_interval
     ).run_loop()
 
 
@@ -90,7 +91,8 @@ def create_argparser():
         run_name="edm_train",
         alpha_schedule="cosine",
         objective="pred_noise",
-        num_timesteps=100
+        num_timesteps=100,
+        backwards_interval=1
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

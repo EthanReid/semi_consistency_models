@@ -141,7 +141,8 @@ def main():
         k=args.k,
         t_scalar=args.t_scalar,
         is_addim=args.is_addim,
-        scd_steps=args.scd_steps
+        scd_steps=args.scd_steps,
+        backwards_interval=args.backwards_interval
     ).run_loop()
 
 
@@ -171,7 +172,8 @@ def create_argparser():
         num_timesteps=100,
         t_scalar=0.1,
         scd_steps=4,
-        is_addim=False
+        is_addim=False,
+        backwards_interval=1
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(cm_train_defaults())

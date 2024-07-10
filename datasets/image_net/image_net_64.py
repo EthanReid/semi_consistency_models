@@ -14,9 +14,8 @@ def unpickle(file):
 def save_image_as_png(args):
     image_array, label, filename, output_dir, batch_index, i = args
     image = Image.fromarray(image_array)
-    label_dir = os.path.join(output_dir, str(label))
-    os.makedirs(label_dir, exist_ok=True)
-    image.save(os.path.join(label_dir, f"{filename}_{batch_index}_{i}.png"))
+    os.makedirs(output_dir, exist_ok=True)
+    image.save(os.path.join(output_dir, filename))
 
 # Function to process a single batch file
 def process_batch(batch_file, output_dir, batch_index, num_workers):
@@ -32,7 +31,7 @@ def process_batch(batch_file, output_dir, batch_index, num_workers):
     data = data.transpose(0, 2, 3, 1)  # Convert to HWC
 
     # Generate filenames
-    filenames = [f'image_{batch_index}_{i}.png' for i in range(len(data))]
+    filenames = [f'{labels[i]}_{batch_index}_{i}.png' for i in range(len(data))]
 
     args = [(data[i], labels[i], filenames[i], output_dir, batch_index, i) for i in range(len(data))]
     with Pool(num_workers) as p:

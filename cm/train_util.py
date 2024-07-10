@@ -45,6 +45,7 @@ class TrainLoop:
         schedule_sampler=None,
         weight_decay=0.0,
         lr_anneal_steps=0,
+        backwards_interval=1
     ):
         self.model = model
         self.diffusion = diffusion
@@ -69,6 +70,7 @@ class TrainLoop:
         self.step = 0
         self.resume_step = 0
         self.global_batch = self.batch_size * dist.get_world_size()
+        self.backwards_interval=backwards_interval
 
         self.sync_cuda = th.cuda.is_available()
 
@@ -115,6 +117,7 @@ class TrainLoop:
             self.ddp_model = self.model
 
         self.step = self.resume_step
+        self.forward_count = 0
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
@@ -164,9 +167,9 @@ class TrainLoop:
         while not self.lr_anneal_steps or self.step < self.lr_anneal_steps:
             batch, cond = next(self.data)
             self.run_step(batch, cond)
-            if self.step % self.log_interval == 0:
+            if self.step % self.log_interval == 0 and self.step!=0:
                 logger.log_wandb(self.step)
-            if self.step % self.save_interval == 0:
+            if self.step % self.save_interval == 0 and self.step!=0:
                 self.save()
                 logger.dumpkvs()
                 # Run for a finite amount of time in integration tests.
@@ -174,17 +177,19 @@ class TrainLoop:
                     return
                 
         # Save the last checkpoint if it wasn't already saved.
-        if (self.step - 1) % self.save_interval != 0:
+        if self.step!=0 and (self.step - 1) % self.save_interval != 0:
             self.save()
 
     def run_step(self, batch, cond):
         self.forward_backward(batch, cond)
-        took_step = self.mp_trainer.optimize(self.opt)
-        if took_step:
-            self.step += 1
-            self._update_ema()
-        self._anneal_lr()
-        self.log_step()
+        self.forward_count+=1
+        if self.forward_count % self.backwards_interval == 0:
+            took_step = self.mp_trainer.optimize(self.opt)
+            if took_step:
+                self.step += 1
+                self._update_ema()
+            self._anneal_lr()
+            self.log_step()
 
     def forward_backward(self, batch, cond):
         self.mp_trainer.zero_grad()
@@ -226,7 +231,7 @@ class TrainLoop:
                 self.diffusion, t, {k: v for k, v in losses.items()}
                 # self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
-            self.mp_trainer.backward(loss)
+            self.mp_trainer.backward(loss*(1/self.backwards_interval))
 
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):
@@ -286,6 +291,7 @@ class CMTrainLoop(TrainLoop):
         t_scalar=0.1,
         is_addim=False,
         scd_steps=4,
+        backwards_interval=1,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -299,6 +305,8 @@ class CMTrainLoop(TrainLoop):
         self.t_scalar = t_scalar
         self.is_addim=is_addim,
         self.scd_steps=scd_steps
+        self.backwards_interval = backwards_interval
+        self.forward_count = 0
 
         if target_model:
             self._load_and_sync_target_parameters()
@@ -385,7 +393,8 @@ class CMTrainLoop(TrainLoop):
             if (
                 self.global_step
                 and self.save_interval != -1
-                and self.global_step % self.save_interval == 0
+                and self.step % self.save_interval == 0
+                and self.step > 0
             ):
                 self.save()
                 logger.dumpkvs()
@@ -405,7 +414,8 @@ class CMTrainLoop(TrainLoop):
     def run_step(self, batch, cond):
         self.forward_backward(batch, cond)
         took_step = self.mp_trainer.optimize(self.opt)
-        if took_step:
+        self.forward_count+=1
+        if self.forward_count%self.backwards_interval==0 and took_step:
             self._update_ema()
             if self.target_model:
                 self._update_target_ema()
@@ -518,7 +528,7 @@ class CMTrainLoop(TrainLoop):
                 self.diffusion, None, {k: v for k, v in losses.items()}
                 # self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
-            self.mp_trainer.backward(loss)
+            self.mp_trainer.backward(loss*(1/self.backwards_interval))
 
     def save(self):
         import blobfile as bf

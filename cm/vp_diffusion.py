@@ -15,6 +15,8 @@ from tqdm.auto import tqdm
 from .nn import mean_flat, append_dims, append_zero, right_pad_dims_to
 from .random_util import get_generator
 import torch.distributed as dist
+from .dpm_solver_pytorch import NoiseScheduleVP, model_wrapper, DPM_Solver
+
 
 
 # alpha schedules
@@ -362,7 +364,8 @@ class VPSampler:
         self.sample = {
             "ddim": self.sample_ddim,
             "onestep": self.one_step,
-            "scd": self.sample_scd
+            "scd": self.sample_scd,
+            "dpm": self.sample_dpm
         }[sampler]
         self.training_mode=training_mode
         self.cm_steps=cm_steps
@@ -376,7 +379,7 @@ class VPSampler:
         return denoised
 
     def get_sampling_timesteps(self, batch, *, device, invert = False):
-        times = th.linspace(1., 0., self.num_timesteps + 1, device = device)
+        times = th.linspace(1, 0., self.num_timesteps+1, device = device)#why nt+1, should be nt?
         if invert:
             times = times.flip(dims = (0,))
         times = repeat(times, 't -> b t', b = batch)
@@ -400,6 +403,15 @@ class VPSampler:
         out = alpha_s*pred_x + ((sigma_s/sigma_t)*(x_t-alpha_t*pred_x))
         return c_skip*x_t + c_out*out
     
+    def __ddim_2(self, x_t, model_out, t, s):
+        alpha_t, alpha_s, sigma_t, sigma_s = self.get_alpha_sigma(t, s, x_t)
+        c_skip, c_out = scaling_for_ddim_boundry(t, s)
+        c_skip = append_dims(c_skip, x_t.ndim)
+        c_out = append_dims(c_out, x_t.ndim)
+        pred_x = alpha_t*x_t-sigma_t*model_out
+        out = alpha_s*pred_x + ((sigma_s/sigma_t)*(x_t-alpha_t*pred_x))
+        return c_skip*x_t + c_out*out
+    
     def __invDDIM(self, x_s, x_t, t, s):
         alpha_t, alpha_s, sigma_t, sigma_s = self.get_alpha_sigma(t, s, x_s)
         x = (x_s-((sigma_s/sigma_t)*x_t))/(alpha_s-(alpha_t*(sigma_s/sigma_t)))
@@ -413,7 +425,19 @@ class VPSampler:
             denoised = self.denoise(x_t=x_t, t=t)
             x_t = self.__ddim(x_t, denoised, t, s)
         return x_t
-    
+    '''
+    @th.no_grad()
+    def sample_ddim(self):
+        x_t = th.randn(self.shape, device=self.device)
+        for i in tqdm(range(self.num_timesteps), desc = 'sampling loop time step', total = self.num_timesteps):
+            t = 1-(i/self.num_timesteps)
+            s = t-(1/self.num_timesteps)
+            t = th.tensor(t, device=self.device).unsqueeze(0)
+            s = th.tensor(s, device=self.device).unsqueeze(0)
+            denoised = self.denoise(x_t=x_t, t=t)
+            x_t = self.__ddim(x_t, denoised, t, s)
+        return x_t
+    '''
     @th.no_grad()
     def one_step(self):
         x_t = th.randn(self.shape, device=self.device)
@@ -432,7 +456,31 @@ class VPSampler:
             x_t = self.__ddim(x_t, denoised, t, s)
         return x_t
 
+    @th.no_grad()
+    def sample_dpm(self):
+        raise NotImplementedError
+        betas = th.tensor(np.linspace(1, 1e-4, self.num_timesteps, dtype=np.float64), device=self.device)
+        #alpha_t = [self.diffusion.alpha_schedule(t[i]) for i in t]
+        noise_schedule = NoiseScheduleVP(schedule='discrete', betas=betas)
+        noise_schedule.total_N = self.num_timesteps
+        model_fn = model_wrapper(
+            self.denoise,
+            noise_schedule,
+            model_type="noise",  # or "x_start" or "v" or "score"
+            model_kwargs=self.model_kwargs,
+        )
+        dpm_solver = DPM_Solver(model_fn, noise_schedule, algorithm_type="dpmsolver++")
+        x_t = th.randn(self.shape, device=self.device)
+        x_sample = dpm_solver.sample(
+            x_t,
+            steps=self.num_timesteps,
+            order=3,
+            skip_type="time_uniform",
+            method="multistep",
+            t_end=1e-4
+        )
+        return x_sample
 
 
-    
+        
         
