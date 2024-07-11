@@ -267,7 +267,7 @@ class VPDenoiser:
 
         return terms
     
-    def scd_loss(self, model, target_model, diffusion_model, x_start, device, k=1, t=None, s=None, alpha_sq=None, noise=None, t_scalar=0.1, is_addim=False, steps=4, **model_kwargs):
+    def scd_loss(self, model, target_model, diffusion_model, x_start, device, k=1, t=None, s=None, alpha_sq=None, noise=None, t_scalar=0.1, is_addim=False, steps=4, model_kwargs=None):
         #t and s calculated in parent func
         if model_kwargs is None:
             model_kwargs = {}
@@ -289,13 +289,13 @@ class VPDenoiser:
         x_t = alpha_t*x_start+sigma_t*noise  
 
         with th.no_grad():
-            x_diffusion = self.diffusion_model_output(diffusion_model, x_t=x_t, t=t).pred_x_start
+            x_diffusion = self.diffusion_model_output(diffusion_model, x_t, t, None, **model_kwargs).pred_x_start
             #if is_addim:
             #    x_s = self.__aDDIM(x_t, x_diffusion, x_start, t, s, x_t.shape[-1]**2) #d is assumed to be width^2. Only square images
             #else:
             x_s = self.__ddim(x_t, x_diffusion, t, s)
         
-        x_0_t = self.consistency_model_output(model, x_t, t)
+        x_0_t = self.consistency_model_output(model, x_t, t, **model_kwargs)
         x_0_s = self.__invDDIM(x_s, x_t, t, s)
 
         if self.loss_norm == "l1":

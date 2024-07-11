@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 import argparse
 from multiprocessing import Pool
+import random
 
 def process_image(args):
     image_path, image_size = args
@@ -12,6 +13,7 @@ def process_image(args):
 
 def load_and_resize_images(image_dir, num_images, image_size, num_workers):
     image_files = os.listdir(image_dir)[:num_images]
+    random.shuffle(image_files)
     image_paths = [os.path.join(image_dir, image_file) for image_file in image_files]
     pool_args = [(image_path, image_size) for image_path in image_paths]
     
